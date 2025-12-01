@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>可视化图片文件批量命名与管理系统</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>可视化图片文件批量命名与管理系统</h1>
+
+        <div class="section">
+            <h3>图片文件夹</h3>
+            <div class="input-group">
+                <input type="text" id="folderPath" placeholder="请选择图片文件夹路径">
+                <button id="browseBtn">浏览...</button>
+            </div>
+
+            <!-- 文件夹浏览区域 -->
+            <div class="folder-browser" id="folderBrowser" style="margin-top:10px; display:none; max-height:200px; overflow-y:auto;">
+                <div id="currentPathDisplay" style="margin-bottom:10px; font-weight:bold;"></div>
+                <ul id="folderList"></ul>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>命名设置</h3>
+            <div class="settings">
+                <div class="setting-item">
+                    <label for="prefix">前缀名称:</label>
+                    <input type="text" id="prefix" value="image">
+                </div>
+                <div class="setting-item">
+                    <label for="startNum">起始序号:</label>
+                    <input type="number" id="startNum" value="1" min="1">
+                </div>
+                <div class="setting-item">
+                    <label for="numDigits">序号位数:</label>
+                    <select id="numDigits">
+                        <option value="1">1位</option>
+                        <option value="2" selected>2位</option>
+                        <option value="3">3位</option>
+                        <option value="4">4位</option>
+                        <option value="5">5位</option>
+                        <option value="6">6位</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>预览</h3>
+            <div class="preview" id="previewArea">
+                请选择文件夹并点击"预览效果"查看重命名示例
+            </div>
+        </div>
+
+        <div class="buttons">
+            <button id="previewBtn">预览效果</button>
+            <button id="renameBtn">执行重命名</button>
+        </div>
+
+        <div class="status" id="statusArea">
+            就绪
+        </div>
+
+        <div id="resultArea" style="display:none;"></div>
+    </div>
+
+    <script>
+        // 文件夹浏览功能
+        document.getElementById('browseBtn').addEventListener('click', () => {
+            const folderBrowser = document.getElementById('folderBrowser');
+            folderBrowser.style.display = folderBrowser.style.display === 'none' ? 'block' : 'none';
+            loadFolders(); // 加载初始文件夹（现在会显示盘符列表）
+        });
+
+        // 加载文件夹列表
+        async function loadFolders(path = '') {
+            try {
+                const response = await fetch('/browse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path })
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    document.getElementById('currentPathDisplay').textContent = result.current_path;
+                    const folderList = document.getElementById('folderList');
+                    folderList.innerHTML = '';
+
+                    // 生成文件夹列表
+                    result.folders.forEach(folder => {
+                        const li = document.createElement('li');
+                        li.textContent = folder.name;
+
+                        // 点击文件夹进入该目录或选择该目录
+                        li.addEventListener('click', () => {
+                            // 处理"此电脑"返回逻辑
+                            if (folder.name.startsWith('.. (此电脑)')) {
+                                loadFolders(''); // 加载盘符列表
+                            }
+                            // 处理上级目录
+                            else if (folder.name.startsWith('.. (上级目录)')) {
+                                loadFolders(folder.path); // 进入上级目录
+                            }
+                            // 处理盘符（如C:\, D:\）
+                            else if (folder.path && folder.path.endsWith(':\\')) {
+                                // 双击选择盘符作为文件夹
+                                li.addEventListener('dblclick', () => {
+                                    document.getElementById('folderPath').value = folder.path;
+                                    document.getElementById('folderBrowser').style.display = 'none';
+                                    updateStatus(`已选择文件夹: ${folder.path}`);
+                                });
+                                // 单击进入盘符查看子目录
+                                loadFolders(folder.path);
+                            }
+                            // 处理普通文件夹
+                            else {
+                                // 双击选择文件夹
+                                li.addEventListener('dblclick', () => {
+                                    document.getElementById('folderPath').value = folder.path;
+                                    document.getElementById('folderBrowser').style.display = 'none';
+                                    updateStatus(`已选择文件夹: ${folder.path}`);
+                                });
+                                // 单击进入子目录
+                                loadFolders(folder.path);
+                            }
+                        });
+
+                        folderList.appendChild(li);
+                    });
+                } else {
+                    updateStatus(result.message, 'error');
+                }
+            } catch (error) {
+                updateStatus('文件夹浏览失败: ' + error.message, 'error');
+            }
+        }
+
+        // 预览功能
+        document.getElementById('previewBtn').addEventListener('click', async () => {
+            const folderPath = document.getElementById('folderPath').value;
+            const prefix = document.getElementById('prefix').value;
+            const startNum = document.getElementById('startNum').value;
+            const numDigits = document.getElementById('numDigits').value;
+
+            if (!folderPath) {
+                updateStatus('请选择图片文件夹', 'error');
+                return;
+            }
+
+            try {
+                updateStatus('正在生成预览...');
+                const formData = new FormData();
+                formData.append('folder_path', folderPath);
+                formData.append('prefix', prefix);
+                formData.append('start_num', startNum);
+                formData.append('num_digits', numDigits);
+
+                const response = await fetch('/preview', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                const previewArea = document.getElementById('previewArea');
+
+                if (result.status === 'success') {
+                    previewArea.innerHTML = '';
+                    result.preview.forEach(item => {
+                        const div = document.createElement('div');
+                        div.textContent = item;
+                        previewArea.appendChild(div);
+                    });
+                    updateStatus(result.message);
+                } else {
+                    previewArea.innerHTML = result.message;
+                    updateStatus(result.message, 'error');
+                }
+            } catch (error) {
+                updateStatus('预览失败: ' + error.message, 'error');
+            }
+        });
+
+        // 执行重命名
+        document.getElementById('renameBtn').addEventListener('click', async () => {
+            const folderPath = document.getElementById('folderPath').value;
+            const prefix = document.getElementById('prefix').value;
+            const startNum = document.getElementById('startNum').value;
+            const numDigits = document.getElementById('numDigits').value;
+
+            if (!folderPath) {
+                updateStatus('请选择图片文件夹', 'error');
+                return;
+            }
+
+            if (!confirm('确定要执行重命名操作吗？此操作不可撤销！')) {
+                return;
+            }
+
+            try {
+                updateStatus('正在执行重命名...');
+                const formData = new FormData();
+                formData.append('folder_path', folderPath);
+                formData.append('prefix', prefix);
+                formData.append('start_num', startNum);
+                formData.append('num_digits', numDigits);
+
+                const response = await fetch('/rename', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                const resultArea = document.getElementById('resultArea');
+
+                if (result.status === 'success') {
+                    resultArea.className = 'result success';
+                    resultArea.innerHTML = `<pre>${result.message}</pre>`;
+                    updateStatus('重命名操作已完成');
+                } else {
+                    resultArea.className = 'result error';
+                    resultArea.innerHTML = result.message;
+                    updateStatus(result.message, 'error');
+                }
+
+                resultArea.style.display = 'block';
+                // 重新生成预览
+                document.getElementById('previewBtn').click();
+            } catch (error) {
+                updateStatus('重命名失败: ' + error.message, 'error');
+            }
+        });
+
+        // 更新状态信息
+        function updateStatus(message, type = 'info') {
+            const statusArea = document.getElementById('statusArea');
+            statusArea.textContent = message;
+
+            if (type === 'error') {
+                statusArea.style.backgroundColor = '#ffebee';
+                statusArea.style.color = '#c62828';
+            } else {
+                statusArea.style.backgroundColor = '#e3f2fd';
+                statusArea.style.color = '#0d47a1';
+            }
+        }
+    </script>
+</body>
+</html>
